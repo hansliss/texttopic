@@ -58,16 +58,17 @@ void pixWrite(unsigned char *text, font f, image i, int scale, float aspectRatio
       posy -= scale * FONTGEOMY;
     }
     if (posy < 0) break;
+    int isCursor = text[cp] == '\\';
     if (text[cp] == '\n') {
       posx = 0;
       posy -= scale * FONTGEOMY;
     } else if (text[cp] == '\r') {
       posx = 0;
-    } else if ((bp = findBits(f, text[cp])) != -1) {
+    } else if (isCursor || (bp = findBits(f, text[cp])) != -1) {
       int x, y, ix, iy;
       for (y = 0; y < FONTGEOMY; y++)
 	for (x = 0; x < FONTGEOMX; x++) {
-	  int bitSet = getBit(x, y, bp, f);
+	  int bitSet = isCursor || getBit(x, y, bp, f);
 	  for (iy = 0; iy < scale; iy++)
 	    for (ix = 0; ix < xscale; ix++) {
 	      if (posx + xscale * x + ix < i->width && posy + scale * y + iy < i->height) {
@@ -142,7 +143,7 @@ int main(int argc, char *argv[]) {
   i->width = 0;
   i->height = 0;
   font f = (font)malloc(sizeof(struct font_s));
-  int textlen, r;
+  int textlen;
   while ((o=getopt(argc, argv, "f:w:h:s:r:F:C:o:"))!=-1) {
     switch (o)
       {
@@ -194,8 +195,14 @@ int main(int argc, char *argv[]) {
   }
   textlen = read(fileno(infile), inbuf, BUFSIZE);
   inbuf[textlen] = '\0';
-  r=read(fileno(ffile), f->bits, sizeof(f->bits));
-  r=read(fileno(cfile), f->charset, sizeof(f->charset));
+  if (read(fileno(ffile), f->bits, sizeof(f->bits)) == -1) {
+    perror("read font file");
+    return -1;
+  }
+  if (read(fileno(cfile), f->charset, sizeof(f->charset)) == -1) {
+    perror("read charset file");
+    return -1;
+  }
   i->widthBytes = i->width / 8 + ((i->width % 8)?1:0);
   i->bitmap = (unsigned char *)calloc(i->height * i->widthBytes, 1);
   memset(i->bitmap, 0xFF, i->height * i->widthBytes);
