@@ -10,7 +10,7 @@
 #define BUFSIZE 8192
 
 void usage(char *progname) {
-  fprintf(stderr, "Usage: %s -f <textfile> -w <width> -h <height> [-s <scale>] [-r <aspect ratio>] -F <font file> -C <charset file> -o <output file>\n", progname);
+  fprintf(stderr, "Usage: %s -f <textfile> [-s <scale>] [-r <aspect ratio>] -F <font file> -C <charset file> -o <output file>\n", progname);
 }
 
 typedef struct font_s {
@@ -19,11 +19,68 @@ typedef struct font_s {
 } *font;
 
 typedef struct image_s {
-  unsigned char *bitmap;
-  int width;
-  int height;
-  int widthBytes;
+  unsigned char **bitmap;
+  int maxX;
+  int minX;
+  int maxY;
+  int minY;
+  int allocRows;
+  int allocBytesPerRow;
 } *image;
+
+void plot(image i, int x, int y, int white) {
+  int newMaxX = i->maxX, newMinX = i->minX, newMaxY = i->maxY, newMinY = i->minY;
+  if (x > newMaxX) newMaxX = x;
+  if (x < newMinX) newMinX = x;
+  if (y > newMaxY) newMaxY = y;
+  if (y < newMinY) newMinY = y;
+  int width = newMaxX - newMinX + 1;
+  unsigned int bytesPerRow = width / 8 + ((width % 8)?1:0);
+  if (i->allocBytesPerRow < bytesPerRow) {
+    int newWidth = (int)((float)bytesPerRow * 1.5);
+    for (int idx=i->minY; idx <= i->maxY; idx++) {
+      i->bitmap[idx - i->minY] = realloc(i->bitmap[idx - i->minY], newWidth);
+      if (newMinX < i->minX) {
+	memmove(&(i->bitmap[idx - i->minY][i->minX - newMinX]), i->bitmap[idx - i->minY], i->maxX - i->minX + 1);
+	memset(i->bitmap[idx - i->minY], 0xFF, i->minX - newMinX);
+      }
+      memset(&(i->bitmap[idx - i->minY][i->allocBytesPerRow + (i->minX - newMinX)]), 0xFF, newWidth - (i->allocBytesPerRow + (i->minX - newMinX)));
+    }
+    i->allocBytesPerRow = newWidth;
+  }
+  i->maxX = newMaxX;
+  i->minX = newMinX;
+  if (newMaxY - newMinY + 1 > i->allocRows) {
+    int newRows = (int)((float)(newMaxY - newMinY + 1));
+    i->bitmap = (unsigned char **)realloc(i->bitmap, sizeof(char*) * newRows);
+    if (newMinY < i->minY) {
+      memmove(&(i->bitmap[i->minY - newMinY]), i->bitmap, sizeof(char*) * (i->maxY - i->minY + 1));
+      for (int idx = 0; idx < i->minY - newMinY; idx++) {
+	i->bitmap[idx] = (unsigned char *)malloc(i->allocBytesPerRow);
+	memset(i->bitmap[idx], 0xFF, i->allocBytesPerRow);
+      }
+    }
+    for (int idx = i->allocRows + (i->minX - newMinX); idx < newRows; idx++) {
+      i->bitmap[idx] = (unsigned char *)malloc(i->allocBytesPerRow);
+      memset(i->bitmap[idx], 0xFF, i->allocBytesPerRow);
+    }
+    i->allocRows = newRows;
+  }
+  i->maxY = newMaxY;
+  i->minY = newMinY;
+  unsigned int byteIdx = (x - i->minX) / 8;
+  unsigned int bitIdx = 8 - ((x - i->minX) % 8) - 1;
+  i->bitmap[y - i->minY][byteIdx] = (i->bitmap[y - i->minY][byteIdx] & ~((unsigned char)(1 << bitIdx))) | ((white?0:1) << bitIdx);
+}
+
+void adjustImage(image i) {
+  i->bitmap = (unsigned char **)realloc(i->bitmap, sizeof(unsigned char*) * (i->maxY  - i->minY + 1));
+  int width = i->maxX - i->minX + 1;
+  unsigned int bytesPerRow = width / 8 + ((width % 8)?1:0);
+  for (int idx=i->minY; idx <= i->maxY; idx++) {
+    i->bitmap[idx - i->minY] = (unsigned char *)realloc(i->bitmap[idx - i->minY], bytesPerRow);
+  }
+}
 
 int findBits(font f, unsigned char c) {
   int i=0;
@@ -48,20 +105,15 @@ int getBit(int x, int y, int fBitsIndex, font f) {
 
 void pixWrite(unsigned char *text, font f, image i, int scale, float aspectRatio) {
   int posx = 0;
-  int posy = i->height - scale * FONTGEOMY;
+  int posy = 0;
   int bp;
   int cp=0;
   int xscale = ((int)(aspectRatio * (float)scale));
   while (text[cp]) {
-    if (posx >= i->width) {
-      posx = 0;
-      posy -= scale * FONTGEOMY;
-    }
-    if (posy < 0) break;
     int isCursor = text[cp] == '\\';
     if (text[cp] == '\n') {
       posx = 0;
-      posy -= scale * FONTGEOMY;
+      posy += scale * FONTGEOMY;
     } else if (text[cp] == '\r') {
       posx = 0;
     } else if (isCursor || (bp = findBits(f, text[cp])) != -1) {
@@ -71,12 +123,9 @@ void pixWrite(unsigned char *text, font f, image i, int scale, float aspectRatio
 	  int bitSet = isCursor || getBit(x, y, bp, f);
 	  for (iy = 0; iy < scale; iy++)
 	    for (ix = 0; ix < xscale; ix++) {
-	      if (posx + xscale * x + ix < i->width && posy + scale * y + iy < i->height) {
-		unsigned int idx = posx + xscale * x + ix + 8 * i->widthBytes * (i->height - (posy + scale * y + iy) - 1);
-		unsigned int byteIdx = idx / 8;
-		unsigned int bitIdx = 8 - (idx % 8) - 1;
-		i->bitmap[byteIdx] = (i->bitmap[byteIdx] & ~((unsigned char)(1 << bitIdx))) | ((bitSet?0:1) << bitIdx);
-	      }
+	      int curX = posx + xscale * x + ix;
+	      int curY = posy - scale * y + iy;
+	      plot(i, curX, curY, bitSet);
 	    }
 	}
       posx += xscale * FONTGEOMX;
@@ -90,7 +139,6 @@ void pixWrite(unsigned char *text, font f, image i, int scale, float aspectRatio
 void writepng(image i, FILE *f) {
   png_structp png;
   png_infop info;
-  png_bytep *row_pointers;
   
   if (!(png = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL))) {
     abort();
@@ -107,7 +155,7 @@ void writepng(image i, FILE *f) {
   png_set_IHDR(
 	       png,
 	       info,
-	       i->width, i->height,
+	       i->maxX - i->minX + 1, i->maxY - i->minY + 1,
 	       1,
 	       PNG_COLOR_TYPE_GRAY,
 	       PNG_INTERLACE_NONE,
@@ -115,23 +163,13 @@ void writepng(image i, FILE *f) {
 	       PNG_FILTER_TYPE_DEFAULT
 	       );
 
+  adjustImage(i);
+
   png_write_info(png, info);
 
-  row_pointers = (png_bytep*)malloc(sizeof(png_bytep) * i->height);
-  for (int y = 0; y < i->height; y++) {
-    row_pointers[y] = (png_byte*)malloc(i->widthBytes);
-    for (int x = 0; x < i->widthBytes; x++) {
-      row_pointers[y][x] = i->bitmap[y * (i->widthBytes) + x];
-    }
-  }
-
-  png_write_image(png, row_pointers);
+  png_write_image(png, i->bitmap);
   png_write_end(png, NULL);
     
-  for(int y = 0; y < i->height; y++) {
-    free(row_pointers[y]);
-  }
-  free(row_pointers);
 }
 
 int main(int argc, char *argv[]) {
@@ -140,11 +178,13 @@ int main(int argc, char *argv[]) {
   static unsigned char inbuf[BUFSIZE];
   FILE *infile=NULL, *ffile=NULL, *cfile=NULL, *ofile = NULL;
   image i = (image)malloc(sizeof(struct image_s));
-  i->width = 0;
-  i->height = 0;
+  i->minX = 0;
+  i->maxX = 0;
+  i->minY = 0;
+  i->maxY = 0;
   font f = (font)malloc(sizeof(struct font_s));
   int textlen;
-  while ((o=getopt(argc, argv, "f:w:h:s:r:F:C:o:"))!=-1) {
+  while ((o=getopt(argc, argv, "f:s:r:F:C:o:"))!=-1) {
     switch (o)
       {
       case 'f':
@@ -171,12 +211,6 @@ int main(int argc, char *argv[]) {
 	  return -1;
 	}
 	break;
-      case 'w':
-	i->width = atoi(optarg);
-	break;
-      case 'h':
-	i->height = atoi(optarg);
-	break;
       case 's':
 	scale = atoi(optarg);
 	break;
@@ -189,7 +223,7 @@ int main(int argc, char *argv[]) {
 	break;
       }
   }
-  if (i->width == 0 || i->height == 0 || !infile || !ffile || !cfile || !ofile) {
+  if (!infile || !ffile || !cfile || !ofile) {
     usage(argv[0]);
     return -1;
   }
@@ -203,9 +237,11 @@ int main(int argc, char *argv[]) {
     perror("read charset file");
     return -1;
   }
-  i->widthBytes = i->width / 8 + ((i->width % 8)?1:0);
-  i->bitmap = (unsigned char *)calloc(i->height * i->widthBytes, 1);
-  memset(i->bitmap, 0xFF, i->height * i->widthBytes);
+  i->allocBytesPerRow = 1;
+  i->allocRows = 1;
+  i->bitmap = (unsigned char **)malloc(sizeof(unsigned char *));
+  i->bitmap[0] = (unsigned char *)malloc(1);
+  i->bitmap[0][0] = 0xFF;
   fclose(infile);
   fclose(ffile);
   fclose(cfile);
