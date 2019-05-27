@@ -30,11 +30,20 @@ typedef struct image_s {
   int allocBytesPerRow;
 } *image;
 
+typedef struct coords_s {
+  int isfirst;
+  float x;
+  float y;
+  struct coords_s *next;
+} *coords;
+
 typedef struct vecdata_s {
+  int isrect;
   float x;
   float y;
   float width;
   float height;
+  coords vertices;
   struct vecdata_s *next;
 } *vecdata;
 
@@ -42,6 +51,7 @@ void addRect(vecdata *v, float x, float y, float width, float height) {
   if (*v) addRect(&((*v)->next), x, y, width, height);
   else {
     vecdata tmp = (vecdata)malloc(sizeof(struct vecdata_s));
+    tmp->isrect = 1;
     tmp->next=NULL;
     tmp->x = x;
     tmp->y = y;
@@ -51,12 +61,41 @@ void addRect(vecdata *v, float x, float y, float width, float height) {
   }
 }
 
+void addVertexHelper(coords *c, float x, float y) {
+  if ((*c) != NULL) addVertexHelper(&((*c)->next), x, y);
+  else {
+    coords tmp = (coords)malloc(sizeof(struct coords_s));
+    tmp->x = x;
+    tmp->y = y;
+    tmp->next = NULL;
+    (*c) = tmp;
+  }
+}
+
+void addVertex(vecdata v, float x, float y) {
+  addVertexHelper(&(v->vertices), x, y);
+}
+
 void vecFree(vecdata *v) {
   if (*v) {
     vecFree(&((*v)->next));
     free(*v);
     *v = NULL;
   }
+}
+
+void makePolygon(vecdata v) {
+  if (v->vertices) return;
+  addVertex(v, v->x, v->y);
+  addVertex(v, v->x, v->y + v->height);
+  addVertex(v, v->x + v->width, v->y + v->height);
+  addVertex(v, v->x + v->width, v->y);
+  addVertex(v, v->x, v->y);
+}
+
+int isConvex(vecdata v) {
+  if (v->isrect) return 1;
+  
 }
 
 void plot(image i, int x, int y, int white) {
