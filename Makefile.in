@@ -27,7 +27,12 @@ SOURCES=texttopic.c
 OBJS=texttopic.o
 LIB_OBJS=
 
-all: $(TARGET)
+TARGET2=texttofont
+SOURCES2=texttofont.c
+OBJS2=texttofont.o
+LIB_OBJS2=
+
+all: $(TARGET) $(TARGET2)
 
 install: all
 	$(top_srcdir)/mkinstalldirs $(bindir)
@@ -40,8 +45,13 @@ $(TARGET): $(OBJS)
 
 $(OBJS): $(SOURCES)
 
+$(TARGET2): $(OBJS2)
+	$(CC) $(CFLAGS) -o $(TARGET2) $(OBJS2) $(LDFLAGS) $(LIBS2)
+
+$(OBJS2): $(SOURCES2)
+
 clean:
-	/bin/rm -f $(TARGET) *.o core
+	/bin/rm -f $(TARGET) $(TARGET2) *.o core
 
 distclean: clean config-clean
 

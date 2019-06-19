@@ -95,7 +95,7 @@ void makePolygon(vecdata v) {
 
 int isConvex(vecdata v) {
   if (v->isrect) return 1;
-  
+  return 0;
 }
 
 void plot(image i, int x, int y, int white) {
